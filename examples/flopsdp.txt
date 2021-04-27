@@ -1,0 +1,16 @@
+# dp flops
+PAPI_DP_OPS
+PAPI_VEC_DP
+
+formulas:
+
+# examples:
+#
+# valid:
+# DP Flops[ GFLOPS/s ]= 1.0e-9 *(     PAPI_DP_OPS    /    Time   )
+#
+# invalid: (unit is missing)
+# DP Flops [] = 1.0e-9 * (PAPI_DP_OPS/Time)
+
+DP Flops [GFLOP/s] = 1.0e-9*(PAPI_DP_OPS/time)
+Vector Ratio [%] = (PAPI_VEC_DP/PAPI_DP_OPS)*100
