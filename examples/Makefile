@@ -17,7 +17,8 @@ DEFS := -DCLS=$(CLS) -DPAPI_UTIL_USEPAPI=$(USEPAPI)
 CFLAGS ?= -Ofast -march=native -std=gnu11 -Wall -Wextra -fopenmp
 
 # linking
-LDFLAGS = -lm -lpthread -lpapi
+LDFLAGS := -lm -lpthread -lpapiutil -lpapi
+LDFLAGS += -L..
 ifneq (,$(PAPI_LIBDIR))
 LDFLAGS += -L$(PAPI_LIBDIR)
 endif
