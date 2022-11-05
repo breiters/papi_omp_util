@@ -1,20 +1,20 @@
 SHELL := /bin/bash
 
-SRC = triad.c ../src/papi_util.c
-OBJ = $(patsubst %.c, %.o, $(SRC))
-BIN = triad
+SRC := triad.c
+OBJ := $(patsubst %.c, %.o, $(SRC))
+BIN := triad
 
-CC = gcc
+CC ?= gcc
 
 # get systems cacheline size:
-CLS = $(shell getconf LEVEL1_DCACHE_LINESIZE)
+CLS := $(shell getconf LEVEL1_DCACHE_LINESIZE)
 
 # defines
-USEPAPI = 1
+USEPAPI := 1
 
-DEFS = -DCLS=$(CLS) -DPAPI_UTIL_USEPAPI=$(USEPAPI)
+DEFS := -DCLS=$(CLS) -DPAPI_UTIL_USEPAPI=$(USEPAPI)
 
-CFLAGS = -Ofast -march=native -std=gnu11 -Wall -fopenmp
+CFLAGS ?= -Ofast -march=native -std=gnu11 -Wall -Wextra -fopenmp
 
 # linking
 LDFLAGS = -lm -lpthread -lpapi
@@ -23,7 +23,7 @@ LDFLAGS += -L$(PAPI_LIBDIR)
 endif
 
 # include
-INCL = 
+INCL ?= -I../include
 ifneq (,$(PAPI_INC))
 INCL += -I$(PAPI_INC)
 endif

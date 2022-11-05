@@ -1,4 +1,4 @@
-#include "../src/papi_util.h"
+#include "papi_util.h"
 
 #define _GNU_SOURCE
 
@@ -52,7 +52,7 @@ double bench(int N)
         time = omp_get_wtime() - t_start;
         REP++;
     } while (time < 1.0);
-    PAPI_UTIL_FINISH(time);
+    PAPI_UTIL_FINISH();
 
     free(a);
     free(b);
@@ -76,6 +76,7 @@ int main(int argc, char **argv)
 {
     int opt;
     struct papi_util_opt options = {.event_file = NULL,
+                                    .print_csv = 0,
                                     .print_threads = 0,
                                     .print_summary = 1,
                                     .print_region = 1,

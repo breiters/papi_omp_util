@@ -1,13 +1,28 @@
 /**
  * @file papi_util.c
- * @author your name (you@domain.com)
- * @brief 
+ * @author Sergej Breiter (sergej.breiter@gmx.de)
+ * @brief
  * @version 0.1
- * @date 2021-04-27
- * 
- * @copyright Copyright (c) 2021
- * 
+ * @date 2022-11-05
+ *
+ * @copyright Copyright (c) 2022
+ *
  */
+
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif /* _GNU_SOURCE */
+
+#include <assert.h>
+#include <ctype.h>
+#include <errno.h>
+#include <math.h>
+#include <omp.h>
+#include <papi.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "papi_util.h"
 
@@ -32,10 +47,11 @@
 #define STATSSEP \
     "====================================================================\n"
 #define INFO_ERR_FMT ": ‘" KGRN BOLD "%s" THIN KNRM "‘"
+#define PAPI_UTIL_ERROR_PREFIX "PAPI UTIL: "
 
 /* function-like defines */
 
-#define eprintf(format, ...) fprintf(stderr, format, ##__VA_ARGS__)
+#define eprintf(format, ...) fprintf(stderr, PAPI_UTIL_ERROR_PREFIX format, ##__VA_ARGS__)
 #define pprintf(format, ...) fprintf(_opt.output, format, ##__VA_ARGS__)
 
 #define CHECK_PAPI_ERROR_VAARG(fn, format, ...)                                      \
@@ -50,7 +66,7 @@
         }                                                                            \
     } while (0)
 
-// stupid compiler does not support __VA__OPT( ) so we have to use ##__VA_ARGS__
+// llvm compiler does not support __VA__OPT( ) so we have to use ##__VA_ARGS__
 // and do this workaround
 #define CHECK_PAPI_ERROR(fn) CHECK_PAPI_ERROR_VAARG(fn, "")
 #define CHECK_PAPI_ERROR_MSG(fn, msg) \
@@ -63,14 +79,17 @@
             exit(EXIT_FAILURE); \
     } while (0)
 
+enum papi_util_err_t { PAPI_UTIL_OK = 0,
+                       PAPI_UTIL_PARSE_ERROR,
+                       PAPI_UTIL_INIT_ERROR };
 
 /***************************
- * 
+ *
  * Expression Tree Code
- * 
+ *
  ***************************/
 
-typedef double (*_binop_type)(double, double);
+typedef double (*binop_type)(double, double);
 
 struct exptree_node {
     double value;
@@ -78,7 +97,7 @@ struct exptree_node {
     struct exptree_node *left;
     struct exptree_node *right;
     struct exptree_node *parent;
-    _binop_type fn;
+    binop_type fn;
 };
 
 struct measurement {
@@ -102,7 +121,7 @@ static int get_formula(struct user_formula *f, char *string)
     // parse formula string
     if (sscanf(string, " %255m[^[] [%255m[^]] %*[^=]= %255m[^\n]", &(f->metric),
                &(f->unit), &form) != 3) {
-        return 1;
+        return PAPI_UTIL_PARSE_ERROR;
     }
     // we have a new formula - build a binary expression tree
     EXIT_PERROR(f->root = calloc(1, sizeof(struct exptree_node)));
@@ -112,9 +131,9 @@ static int get_formula(struct user_formula *f, char *string)
     // sanity check
     if (f->root != result) {
         _destroy_exptree(f->root);
-        return 1;
+        return PAPI_UTIL_PARSE_ERROR;
     }
-    return 0;
+    return PAPI_UTIL_OK;
 }
 
 static void destroy_formula(struct user_formula *f)
@@ -144,6 +163,8 @@ static double _get_value(struct exptree_node *node, struct measurement *meas)
         event_names++;
         i++;
     }
+
+    assert(0);
     return -1.0; // TODO
 }
 
@@ -184,7 +205,7 @@ static inline double _sub(double a, double b) { return a - b; }
 static inline double _mul(double a, double b) { return a * b; }
 static inline double _div(double a, double b) { return a / b; }
 
-static _binop_type _getfunc(char c)
+static binop_type _getfunc(char c)
 {
     switch (c) {
     case '+':
@@ -298,6 +319,9 @@ static int _event_sets[MAX_THREADS];
 static char *_event_names[MAX_EVENTS]; // list of event names
 static struct user_formula _formulas[MAX_FORMULAS];
 
+static double _time_start;
+static _Thread_local int _thread_counter_started = 0;
+
 static int _num_events = 0;
 static int _num_threads = 0;
 static int _num_formulas = 0;
@@ -305,8 +329,9 @@ static double _time_measured = 0.0;
 static int _initialized = 0;
 
 // values that can be set by user
-static char *_region_name;
+static const char *_region_name;
 static struct papi_util_opt _opt = {.event_file = NULL,
+                                    .print_csv = 0,
                                     .print_threads = 0,
                                     .print_summary = 1,
                                     .print_region = 1,
@@ -415,7 +440,7 @@ static char **read_eventfile(const char *event_file)
             // printf("%s\n", lineptr);
             assert(num_events < MAX_EVENTS);
             _event_names[num_events] = lineptr;
-            lineptr = NULL; // cannot free this because even name still needed
+            lineptr = NULL; // cannot free this because event name still needed
             num_events++;
         }
         // get derived formula from line
@@ -437,7 +462,7 @@ static char **read_eventfile(const char *event_file)
     return _event_names;
 }
 
-void PAPI_UTIL_start(char *region_name)
+void PAPI_UTIL_start(const char *region_name)
 {
     assert(_initialized);
 
@@ -449,14 +474,44 @@ void PAPI_UTIL_start(char *region_name)
 
 // everything is setup so we just have to start the counters for each thread
 #pragma omp parallel
-    if (PAPI_num_events(_event_sets[omp_get_thread_num()]) > 0)
+    if (PAPI_num_events(_event_sets[omp_get_thread_num()]) > 0) {
+        assert(!_thread_counter_started);
         CHECK_PAPI_ERROR(PAPI_start(_event_sets[omp_get_thread_num()]));
+        _thread_counter_started = 1;
+    }
+
+    _time_start = omp_get_wtime();
 }
+
+#if START_IN_PARALLEL_REGION_IMPLEMENTED
+void PAPI_UTIL_thread_start(char *region_name)
+{
+    assert(_initialized);
+
+#pragma omp single
+    {
+        _region_name = region_name;
+
+        // erase thread and region values
+        memset(_region_values, 0x0, _num_events * sizeof(long long));
+        memset(_thread_values, 0x0, _num_threads * _num_events * sizeof(long long));
+    }
+
+#pragma omp barrier
+
+    // everything is setup so we just have to start the counters for each thread
+    if (PAPI_num_events(_event_sets[omp_get_thread_num()]) > 0) {
+        assert(!_thread_counter_started);
+        CHECK_PAPI_ERROR(PAPI_start(_event_sets[omp_get_thread_num()]));
+        _thread_counter_started = 1;
+    }
+}
+#endif
 
 /**
  * Initializes PAPI library and events for all threads.
  */
-void PAPI_UTIL_setup(struct papi_util_opt *opt)
+void PAPI_UTIL_setup(const struct papi_util_opt *opt)
 {
     if (_initialized) {
         eprintf("error: already initialized\n");
@@ -513,8 +568,10 @@ void PAPI_UTIL_setup(struct papi_util_opt *opt)
 /**
  *
  */
-void PAPI_UTIL_finish(double time)
+void PAPI_UTIL_finish(void)
 {
+    double time = omp_get_wtime() - _time_start;
+
     if (!_initialized) {
         eprintf("error: not initialized\n");
         return;
