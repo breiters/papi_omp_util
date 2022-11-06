@@ -11,26 +11,40 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-// Schoenauer-Triad Kernel
-void triad(int N, double *restrict a, double *restrict b,
-           double *restrict c, double *restrict d)
+void init(int N, double *restrict a, double *restrict b,
+          double *restrict c, double *restrict d)
 {
 #pragma omp parallel for schedule(static)
     for (int i = 0; i < N; ++i) {
-        a[i] = b[i] + c[i] * d[i];
+        a[i] = 0.0;
+        b[i] = i;
+        c[i] = i;
+        d[i] = i;
     }
-    // avoid optimizing the loop with -O3
-    if (a[0] > b[0])
-        printf("%f%f\n", a[1], b[2]);
+}
+
+// Schoenauer-Triad Kernel
+void triad(int N, int REP, double *restrict a, double *restrict b,
+           double *restrict c, double *restrict d)
+{
+#pragma omp parallel
+    for (int r = 0; r < REP; ++r) {
+#pragma omp for schedule(static)
+        for (int i = 0; i < N; ++i) {
+            a[i] = b[i] + c[i] * d[i];
+        }
+        // avoid optimizing the loop with -O3
+        if (a[0] > b[0])
+            printf("%f%f\n", a[1], b[2]);
+    }
 }
 
 // Actual Benchmark
 double bench(int N)
 {
-    double time;
     double *a = NULL, *b = NULL, *c = NULL, *d = NULL;
     size_t nbytes = N * sizeof(double);
-    int REP = 0;
+    int REP = 1;
 
     a = aligned_alloc(CLS, nbytes);
     b = aligned_alloc(CLS, nbytes);
@@ -42,17 +56,22 @@ double bench(int N)
         exit(EXIT_FAILURE);
     }
 
+    init(N, a, b, c, d);
+
     char region_name[256];
     snprintf(region_name, 255, "Triad N=%d", N);
 
+    double time;
     PAPI_UTIL_START(region_name);
-    double t_start = omp_get_wtime();
     do {
-        triad(N, a, b, c, d);
-        time = omp_get_wtime() - t_start;
-        REP++;
-    } while (time < 1.0);
+        time = omp_get_wtime();
+        triad(N, REP, a, b, c, d);
+        time = omp_get_wtime() - time;
+        REP *= 2;
+    } while (time < 0.5);
     PAPI_UTIL_FINISH();
+
+    REP /= 2;
 
     free(a);
     free(b);
@@ -76,14 +95,13 @@ int main(int argc, char **argv)
 {
     int opt;
     struct papi_util_opt options = {.event_file = NULL,
-                                    .print_csv = 0,
+                                    .print_csv = 1,
                                     .print_threads = 0,
                                     .print_summary = 1,
                                     .print_region = 1,
                                     .component = 0,
                                     .multiplex = 0,
                                     .output = stdout};
-
 
     while ((opt = getopt(argc, argv, "mtc:g:")) != -1) {
         switch (opt) {

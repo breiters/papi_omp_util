@@ -115,18 +115,18 @@ struct user_formula {
 static struct exptree_node *_make_exptree(struct exptree_node *self, char *form);
 static void _destroy_exptree(struct exptree_node *self);
 
-static int get_formula(struct user_formula *f, char *string)
+static int get_formula(struct user_formula *f, const char *string)
 {
-    char *form;
+    char *formula;
     // parse formula string
     if (sscanf(string, " %255m[^[] [%255m[^]] %*[^=]= %255m[^\n]", &(f->metric),
-               &(f->unit), &form) != 3) {
+               &(f->unit), &formula) != 3) {
         return PAPI_UTIL_PARSE_ERROR;
     }
     // we have a new formula - build a binary expression tree
     EXIT_PERROR(f->root = calloc(1, sizeof(struct exptree_node)));
-    struct exptree_node *result = _make_exptree(f->root, form);
-    free(form);
+    struct exptree_node *result = _make_exptree(f->root, formula);
+    free(formula);
 
     // sanity check
     if (f->root != result) {
@@ -401,6 +401,45 @@ static void print_values(double time, long long *values)
     }
 }
 
+static void print_values_csv(double time, long long *values)
+{
+    // RAW EVENTS
+    for (int i = 0; i < _num_events; i++) {
+        pprintf(",%lld", values[i]);
+    }
+
+    // DERIVED EVENTS
+    for (int i = 0; i < _num_formulas; i++) {
+        double value = evaluate_exptree(
+            _formulas[i].root,
+            &(struct measurement){
+                .event_names = _event_names, .values = values, .time = time});
+
+        // TODO: stupid workaround to print avg. frequency per thread
+        if ((values == _region_values || values == _total_values) && !strncasecmp(_formulas[i].metric, "frequency", strlen("frequency"))) {
+            value /= omp_get_max_threads();
+        }
+
+        pprintf(",%lf", value);
+    }
+    pprintf(",%lf\n", time);
+}
+
+static void print_header_csv()
+{
+    pprintf("region,threads,");
+    // RAW EVENTS
+    for (int i = 0; i < _num_events; i++) {
+        pprintf("%s,", _event_names[i]);
+    }
+
+    // DERIVED EVENTS
+    for (int i = 0; i < _num_formulas; i++) {
+        pprintf("%s,", _formulas[i].metric);
+    }
+    pprintf("time\n");
+}
+
 /**
  * Gets PAPI event names from eventfile.
  * Returns PAPI events as list.
@@ -526,6 +565,9 @@ void PAPI_UTIL_setup(const struct papi_util_opt *opt)
     read_eventfile(_opt.event_file);
 
     // printf("eventfile: %s\n", event_file);
+    if (_opt.print_csv) {
+        print_header_csv();
+    }
 
     int retval;
     retval = PAPI_library_init(PAPI_VER_CURRENT);
@@ -590,9 +632,14 @@ void PAPI_UTIL_finish(void)
             for (int i = 0; i < _num_threads; i++)
 #pragma omp ordered
             {
-                pprintf(STATSSEP "   Thread %d Counters:\n" STATSSEP,
-                        omp_get_thread_num());
-                print_values(time, _thread_values[omp_get_thread_num()]);
+                if (_opt.print_csv) {
+                    pprintf("%s,%d", _region_name, omp_get_thread_num());
+                    print_values_csv(time, _thread_values[omp_get_thread_num()]);
+                } else {
+                    pprintf(STATSSEP "   Thread %d Counters:\n" STATSSEP,
+                            omp_get_thread_num());
+                    print_values(time, _thread_values[omp_get_thread_num()]);
+                }
             }
         }
     } // end parallel region
@@ -608,9 +655,14 @@ void PAPI_UTIL_finish(void)
     }
 
     if (_opt.print_region) {
-        pprintf(STATSSEP "   Region %s Summary (%d Threads):\n" STATSSEP,
-                _region_name, omp_get_max_threads());
-        print_values(time, _region_values);
+        if (_opt.print_csv) {
+            pprintf("%s,%d", _region_name, -1);
+            print_values_csv(time, _region_values);
+        } else {
+            pprintf(STATSSEP "   Region %s Summary (%d Threads):\n" STATSSEP,
+                    _region_name, omp_get_max_threads());
+            print_values(time, _region_values);
+        }
     }
 }
 
@@ -623,9 +675,14 @@ void PAPI_UTIL_finalize(void)
     }
 
     if (_opt.print_summary) {
-        pprintf(STATSSEP "   Total Summary (%d Threads):\n" STATSSEP,
-                omp_get_max_threads());
-        print_values(_time_measured, _total_values);
+        if (_opt.print_csv) {
+            pprintf("%s,%d", "total", -1);
+            print_values_csv(_time_measured, _total_values);
+        } else {
+            pprintf(STATSSEP "   Total Summary (%d Threads):\n" STATSSEP,
+                    omp_get_max_threads());
+            print_values(_time_measured, _total_values);
+        }
     }
 
     // cleanup events and buffers for thread counters

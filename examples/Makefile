@@ -32,7 +32,7 @@ endif
 all: $(BIN)
 
 $(BIN): $(OBJ)
-	$(CC) $(CFLAGS) -o $@ $(OBJ) \
+	$(CC) $(CFLAGS) -o $@ $(OBJ) ../src/papi_util.o \
 	$(LDFLAGS)
 
 %.o: %.c
